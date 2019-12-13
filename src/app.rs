@@ -1,10 +1,15 @@
 use crate::rest;
 use crate::transaction::Transaction;
+use gdk::enums::key;
 use gtk::prelude::*;
 use gtk::*;
 use sourceview::*;
 use std::collections::HashMap;
 use std::{cell::RefCell, rc::Rc};
+
+// ========================================================================== //
+
+const MAX_TX_HISTORY: u32 = 32;
 
 // ========================================================================== //
 
@@ -52,9 +57,15 @@ impl App {
         // Create app window
         let window = Window::new(WindowType::Toplevel);
         window.set_title(name);
-        window.set_default_size(640, 360);
+        window.set_default_size(1280, 720);
         window.connect_delete_event(move |_, _| {
             gtk::main_quit();
+            Inhibit(false)
+        });
+        window.connect_key_press_event(|_, e| {
+            if e.get_keyval() == key::Escape {
+                gtk::main_quit();
+            }
             Inhibit(false)
         });
 
@@ -167,11 +178,15 @@ impl App {
             let json = buffer
                 .get_text(&buffer.get_start_iter(), &buffer.get_end_iter(), true)
                 .unwrap();
-            let tx = Transaction::from_json(&json);
-            insert_tx(&mut data_clone.borrow_mut(), &ui_clone.borrow(), tx);
-            match rest::post(&url, &json) {
-                Ok(_) => {}
-                Err(e) => println!("Failed to send transaction ({})", e),
+            match Transaction::from_json(&json) {
+                Ok(tx) => {
+                    insert_tx(&mut data_clone.borrow_mut(), &ui_clone.borrow(), tx);
+                    match rest::post(&url, &json) {
+                        Ok(_) => {}
+                        Err(e) => println!("Failed to send transaction ({})", e),
+                    }
+                }
+                Err(e) => println!("Invalid input ({})", e),
             }
         });
         let help_btn = ButtonBuilder::new().label("Help").build();
@@ -246,10 +261,23 @@ fn add_tree_column(tree: &TreeView, title: &str, id: i32) {
 }
 
 fn insert_tx(data: &mut AppData, ui: &AppUI, tx: Transaction) {
+    // Remove the oldest if the limit is reached
+    if data.txs.len() as u32 >= MAX_TX_HISTORY {
+        match ui.list_model.get_iter_first() {
+            Some(it) => {
+                let idx = ui.list_model.get_value(&it, 0).get::<u32>().unwrap();
+                ui.list_model.remove(&it);
+                data.txs.remove(&idx);
+            }
+            None => {}
+        }
+    }
+
+    // Add new transaction
     let idx = data.id;
     println!("Inserting at index: {}", idx);
     data.id += 1;
     ui.list_model
-        .insert_with_values(Some(0), &[0, 1], &[&idx, &tx.get_id()]);
+        .insert_with_values(None, &[0, 1], &[&idx, &tx.get_id()]);
     data.txs.insert(idx, tx);
 }

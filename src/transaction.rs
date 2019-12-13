@@ -213,9 +213,15 @@ impl Transaction {
     }
 
     ///
-    pub fn from_json(string: &str) -> Self {
-        let v: Value = serde_json::from_str(string).expect("Failed to convert from json");
-        Transaction::from_json_value(&v).unwrap()
+    pub fn from_json(string: &str) -> Result<Self, String> {
+        let v = match serde_json::from_str(string) {
+            Ok(v) => v,
+            Err(_) => return Err(format!("Failed to convert from json")),
+        };
+        match Transaction::from_json_value(&v) {
+            Ok(tx) => Ok(tx),
+            Err(_) => Err(format!("Could not convert json to Transaction")),
+        }
     }
 
     ///
