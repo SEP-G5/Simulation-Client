@@ -10,5 +10,6 @@ fn main() {
         Ok(a) => a,
         Err(_) => panic!("Failed to create application"),
     };
+
     app.run();
 }

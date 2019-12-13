@@ -3,6 +3,7 @@ use crate::transaction::Transaction;
 use gdk::enums::key;
 use gtk::prelude::*;
 use gtk::*;
+use rand::prelude::*;
 use sourceview::*;
 use std::collections::HashMap;
 use std::{cell::RefCell, rc::Rc};
@@ -20,6 +21,8 @@ pub enum AppErr {
 // ========================================================================== //
 
 struct AppUI {
+    /// Statusbar
+    statusbar: Statusbar,
     /// URL input field
     url_input: Entry,
     /// Transaction list view
@@ -28,6 +31,10 @@ struct AppUI {
     list_model: ListStore,
     /// JSON input area
     src_view: View,
+    /// Send button
+    send_btn: Button,
+    /// Num input
+    num_input: Entry,
 }
 
 pub struct AppData {
@@ -35,6 +42,8 @@ pub struct AppData {
     txs: HashMap<u32, Transaction>,
     /// Monotonically increasing ID
     id: u32,
+    /// List of names
+    names: Vec<String>,
 }
 
 pub struct App {
@@ -70,23 +79,36 @@ impl App {
         });
 
         // Create UI elements
+        let statusbar = StatusbarBuilder::new().build();
         let url_input = EntryBuilder::new().build();
         url_input.set_text("http://localhost:8000/transaction");
         let list_view = TreeViewBuilder::new().headers_visible(true).build();
         let list_model = ListStore::new(&[u32::static_type(), String::static_type()]);
         list_view.set_model(Some(&list_model));
         let src_view = build_src_view("json");
+        let send_btn = ButtonBuilder::new().label("Send").build();
+        let num_input = EntryBuilder::new().build();
         let ui = Rc::new(RefCell::new(AppUI {
+            statusbar,
             url_input,
             list_view,
             list_model,
             src_view,
+            send_btn,
+            num_input,
         }));
+
+        // Read names
+        let names = std::include_str!("../names.txt")
+            .split("\n")
+            .map(|n| String::from(n.trim()))
+            .collect();
 
         // Create app and build UI
         let data = Rc::new(RefCell::new(AppData {
             txs: HashMap::new(),
             id: 0,
+            names,
         }));
         let mut app = App { window, ui, data };
         app.build_ui();
@@ -111,8 +133,6 @@ impl App {
         let pane = PanedBuilder::new().border_width(3).expand(true).build();
         add_tree_column(&self.ui.borrow().list_view, "index", 0);
         add_tree_column(&self.ui.borrow().list_view, "id", 1);
-
-        // List
         let wind = ScrolledWindowBuilder::new()
             .hscrollbar_policy(PolicyType::Automatic)
             .vscrollbar_policy(PolicyType::Automatic)
@@ -120,8 +140,6 @@ impl App {
             .build();
         wind.add(&self.ui.borrow().list_view);
         pane.add(&wind);
-
-        // Input area
         let input_area = self.build_input_area();
         pane.add(&input_area);
         vbox.add(&pane);
@@ -156,6 +174,9 @@ impl App {
                 buffer.set_text(&tx.to_json());
             }
         });
+
+        // Statusbar
+        vbox.add(&self.ui.borrow().statusbar);
     }
 
     fn build_input_area(&mut self) -> Box {
@@ -169,29 +190,39 @@ impl App {
 
         // Buttons
         let hbox = Box::new(Orientation::Horizontal, 0);
-        let send_btn = ButtonBuilder::new().label("Send").build();
         let ui_clone = self.ui.clone();
         let data_clone = self.data.clone();
-        send_btn.connect_clicked(move |_| {
-            let url = ui_clone.borrow().url_input.get_text().unwrap();
-            let buffer = ui_clone.borrow_mut().src_view.get_buffer().unwrap();
-            let json = buffer
-                .get_text(&buffer.get_start_iter(), &buffer.get_end_iter(), true)
-                .unwrap();
-            match Transaction::from_json(&json) {
-                Ok(tx) => {
-                    insert_tx(&mut data_clone.borrow_mut(), &ui_clone.borrow(), tx);
-                    match rest::post(&url, &json) {
-                        Ok(_) => {}
-                        Err(e) => println!("Failed to send transaction ({})", e),
+        self.ui.borrow_mut().send_btn.connect_clicked(move |_| {
+            app_send_transaction(&mut data_clone.borrow_mut(), &mut ui_clone.borrow_mut());
+        });
+        let help_btn = ButtonBuilder::new().label("Send N").build();
+        let ui_clone = self.ui.clone();
+        let data_clone = self.data.clone();
+        help_btn.connect_clicked(move |_| {
+            let num = ui_clone.borrow().num_input.get_text().unwrap();
+            match num.parse::<u32>() {
+                Ok(num) => {
+                    for _ in 0..num {
+                        app_set_new_transaction(
+                            &mut data_clone.borrow_mut(),
+                            &mut ui_clone.borrow_mut(),
+                        );
+                        app_send_transaction(
+                            &mut data_clone.borrow_mut(),
+                            &mut ui_clone.borrow_mut(),
+                        );
                     }
                 }
-                Err(e) => println!("Invalid input ({})", e),
+                Err(e) => app_push_statusbar(
+                    &mut ui_clone.borrow_mut(),
+                    "error",
+                    &format!("Invalid number for 'Send N' (text: {}, error: {})", num, e),
+                ),
             }
         });
-        let help_btn = ButtonBuilder::new().label("Help").build();
-        hbox.add(&send_btn);
+        hbox.add(&self.ui.borrow().send_btn);
         hbox.add(&help_btn);
+        hbox.add(&self.ui.borrow().num_input);
 
         let vbox = Box::new(Orientation::Vertical, 0);
         vbox.add(&wind);
@@ -226,11 +257,9 @@ impl App {
         let sim_quit_btn = MenuItemBuilder::new().label("New Registry").build();
         //let list_clone = self.txs.clone();
         let ui_clone = self.ui.clone();
+        let data_clone = self.data.clone();
         sim_quit_btn.connect_activate(move |_| {
-            let (tx, _) = Transaction::debug_make_register(format!("MY_BIKE"));
-            let buffer = ui_clone.borrow_mut().src_view.get_buffer().unwrap();
-            buffer.set_text(&tx.to_json());
-            //list_clone.borrow_mut().push(format!("A tx"));
+            app_set_new_transaction(&mut data_clone.borrow_mut(), &mut ui_clone.borrow_mut());
         });
         sim_menu.append(&sim_quit_btn);
 
@@ -240,6 +269,7 @@ impl App {
 
 // ========================================================================== //
 
+/// Build a source view for the language with the specified identifier
 fn build_src_view(lang: &str) -> View {
     let lang_mgr = LanguageManager::new();
     let lang = lang_mgr
@@ -251,6 +281,9 @@ fn build_src_view(lang: &str) -> View {
     view
 }
 
+// ========================================================================== //
+
+/// Add a column to a tree view
 fn add_tree_column(tree: &TreeView, title: &str, id: i32) {
     let column = TreeViewColumn::new();
     let cell = CellRendererText::new();
@@ -260,7 +293,65 @@ fn add_tree_column(tree: &TreeView, title: &str, id: i32) {
     tree.append_column(&column);
 }
 
-fn insert_tx(data: &mut AppData, ui: &AppUI, tx: Transaction) {
+// ========================================================================== //
+
+/// Push a message to the statusbar
+fn app_push_statusbar(ui: &mut AppUI, id: &str, msg: &str) {
+    let id = ui.statusbar.get_context_id(id);
+    ui.statusbar.push(id, msg);
+}
+
+// ========================================================================== //
+
+/// Generate a random name
+fn app_gen_rand_name(data: &AppData) -> String {
+    let mut rng = rand::thread_rng();
+    let name_idx = rng.gen_range(0, data.names.len());
+    let rand_idx = rng.gen_range(0, 1000);
+    format!("{}_{}", data.names[name_idx], rand_idx)
+}
+
+// ========================================================================== //
+
+/// Send the transaction that is currently in the input area
+fn app_send_transaction(data: &mut AppData, ui: &mut AppUI) {
+    let url = ui.url_input.get_text().unwrap();
+    let buffer = ui.src_view.get_buffer().unwrap();
+    let json = buffer
+        .get_text(&buffer.get_start_iter(), &buffer.get_end_iter(), true)
+        .unwrap();
+    match Transaction::from_json(&json) {
+        Ok(tx) => {
+            app_add_transaction(data, ui, tx);
+            match rest::post(&url, &json) {
+                Ok((r, s)) => app_push_statusbar(
+                    ui,
+                    "info",
+                    &format!("Successfully sent transaction ({}, code {})", r, s),
+                ),
+                Err(e) => {
+                    app_push_statusbar(ui, "error", &format!("Failed to send transaction ({})", e))
+                }
+            }
+        }
+        Err(e) => app_push_statusbar(ui, "error", &format!("Invalid input ({})", e)),
+    }
+}
+
+// ========================================================================== //
+
+/// Generate a new register transaction and set it for the input area
+fn app_set_new_transaction(data: &mut AppData, ui: &mut AppUI) {
+    let name = app_gen_rand_name(&data);
+    let (tx, _) = Transaction::debug_make_register(name);
+    let buffer = ui.src_view.get_buffer().unwrap();
+    buffer.set_text(&tx.to_json());
+}
+
+// ========================================================================== //
+
+/// Add a transaction to the history
+fn app_add_transaction(data: &mut AppData, ui: &AppUI, tx: Transaction) {
     // Remove the oldest if the limit is reached
     if data.txs.len() as u32 >= MAX_TX_HISTORY {
         match ui.list_model.get_iter_first() {
@@ -275,7 +366,6 @@ fn insert_tx(data: &mut AppData, ui: &AppUI, tx: Transaction) {
 
     // Add new transaction
     let idx = data.id;
-    println!("Inserting at index: {}", idx);
     data.id += 1;
     ui.list_model
         .insert_with_values(None, &[0, 1], &[&idx, &tx.get_id()]);
