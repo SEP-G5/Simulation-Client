@@ -1,5 +1,5 @@
 use crate::hash::{self, Hash, Hashable};
-use base64::{decode_config, encode};
+use base64::{decode_config, encode_config};
 use rust_sodium::crypto::sign::{
     self, ed25519::sign, ed25519::verify, ed25519::PublicKey, ed25519::SecretKey,
 };
@@ -203,11 +203,11 @@ impl Transaction {
             "id": self.get_id(),
             "timestamp": self.get_timestamp(),
             "publicKeyInput": Value::Null,
-            "publicKeyOutput": encode(self.get_public_key_output()),
-            "signature": encode(self.get_signature()),
+            "publicKeyOutput": encode_config(self.get_public_key_output(),base64::URL_SAFE),
+            "signature": encode_config(self.get_signature(), base64::URL_SAFE),
         });
         if let Some(pk) = self.get_public_key_input() {
-            *v.get_mut("publicKeyInput").unwrap() = json!(encode(pk));
+            *v.get_mut("publicKeyInput").unwrap() = json!(encode_config(pk, base64::URL_SAFE));
         }
         serde_json::to_string_pretty(&v).expect("Failed to convert to json")
     }
@@ -237,7 +237,7 @@ impl Transaction {
         };
 
         let pub_key_input: Option<PubKey> = match v["publicKeyInput"].as_str() {
-            Some(s) => match decode_config(s, base64::STANDARD) {
+            Some(s) => match decode_config(s, base64::URL_SAFE) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     return Err(format!(
@@ -250,7 +250,7 @@ impl Transaction {
         };
 
         let pub_key_output: PubKey = match v["publicKeyOutput"].as_str() {
-            Some(s) => match decode_config(s, base64::STANDARD) {
+            Some(s) => match decode_config(s, base64::URL_SAFE) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err(format!(
@@ -263,7 +263,7 @@ impl Transaction {
         };
 
         let signature: Signature = match v["signature"].as_str() {
-            Some(s) => match decode_config(s, base64::STANDARD) {
+            Some(s) => match decode_config(s, base64::URL_SAFE) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err(format!(
