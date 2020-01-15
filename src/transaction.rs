@@ -1,7 +1,8 @@
 use crate::hash::{self, Hash, Hashable};
 use base64::{decode_config, encode_config};
 use rust_sodium::crypto::sign::{
-    self, ed25519::sign, ed25519::verify, ed25519::PublicKey, ed25519::SecretKey,
+    self, ed25519, ed25519::sign_detached, ed25519::verify_detached, ed25519::PublicKey,
+    ed25519::SecretKey,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json, Value};
@@ -134,9 +135,7 @@ impl Transaction {
     /// signature. Store the signature in itself.
     pub(crate) fn sign(&mut self, sk: &SecretKey) {
         let buf = self.content_to_u8();
-        let sig = sign(buf.as_slice(), &sk);
-        //let buf = hash::obj_hash(&buf);
-        //let sig = sign(&buf, &sk);
+        let sig = Vec::from(sign_detached(buf.as_slice(), &sk).as_ref());
         self.signature = sig;
     }
 
@@ -165,18 +164,15 @@ impl Transaction {
                 Some(p) => p,
                 None => return Err(format!("could not create public key from input")),
             };
-            match verify(sig, &pk) {
-                Ok(m) => {
-                    let content = self.content_to_u8();
-                    if content == m {
-                        //let content = hash::obj_hash(&content);
-                        //if content == &m[..] {
-                        return Ok(());
-                    } else {
-                        return Err(format!("content does not match the signature"));
-                    }
+            let sig = match ed25519::Signature::from_slice(sig) {
+                Some(sig) => sig,
+                None => {
+                    return Err(format!("signature has invalid format"));
                 }
-                Err(_) => return Err(format!("signature is not valid")),
+            };
+            match verify_detached(&sig, &self.content_to_u8(), &pk) {
+                true => return Ok(()),
+                false => return Err(format!("signature is not valid")),
             };
         };
 
